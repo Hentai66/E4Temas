@@ -1,0 +1,59 @@
+name: Publish E4Temas 1.1.1
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-1.1.1.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: e4temas-release-1.1.1
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify artifacts and publish release with FBI QR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import os, json, hashlib, urllib.request, urllib.error
+          repo = "Hentai66/E4Temas"
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GH_TOKEN"]
+          api = "https://api.github.com/repos/" + repo
+          headers = {"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "E4Temas-release"}
+          def request(url, data=None, method="GET", content_type="application/json"):
+              h = dict(headers)
+              h["Content-Type"] = content_type
+              payload = json.dumps(data).encode() if isinstance(data,dict) else data
+              with urllib.request.urlopen(urllib.request.Request(url, data=payload, headers=h, method=method), timeout=120) as response:
+                  return json.load(response)
+          hashes = {'e4temas-v1.1.1.cia': 'ae5ea411338f366cd6a585b48a7946934cf4603b231906b1e9a15914d8f0b7c3', 'e4temas-v1.1.1.3dsx': 'b8eca8d1c29e280ca4d920aca90c37ce3e1a82dc95021a4ba01549f815faea6e', 'E4Temas-v1.1.1-experimental.zip': '6d202227c961d2a7fba1db15a48c7794467884af737756be25fb49ca174e2885', 'E4Temas-v1.1.1-codigo-fonte.zip': '1b9caba3bc8d39bae69396ab054183011fdc6049263528f34454989e8890a6a3', 'SHA256SUMS.txt': 'fd6f9499e5de45a14c240e82c723dec24c445ac2b42d63973b63256bc076e408', 'E4Temas-v1.1.1-QR-FBI.png': '18d7242cc01006973e6c91e71d208f1991ea82158063031774fd3f0fc9191adb'}
+          body = 'E4Temas v1.1.1 com novos logos no HOME Menu e nas duas interfaces. A animação de areia foi preservada.\n\n- Otimizações para New 3DS e compatibilidade com Old.\n- Barra de progresso com contagem; processamento de um tema por vez.\n- Seleção em lote, exclusão opcional após sucesso e filtro de CIAs incompatíveis.\n- Versão interna mantida em 1.1.1. Preserve /3ds/scl-temas/ no SD.\n\nA edição funcional 1.1.1 foi confirmada pelo usuário no console. Esta revisão de logos foi verificada localmente e ainda aguarda teste em hardware.\n\n## Instalação\n\n[Baixar CIA](https://github.com/Hentai66/E4Temas/releases/download/v1.1.1/e4temas-v1.1.1.cia) · [Baixar 3DSX](https://github.com/Hentai66/E4Temas/releases/download/v1.1.1/e4temas-v1.1.1.3dsx)\n\nNo FBI: **Remote Install → Scan QR Code**.\n\n![QR para instalar E4Temas 1.1.1](https://github.com/Hentai66/E4Temas/releases/download/v1.1.1/E4Temas-v1.1.1-QR-FBI.png)\n'
+          # Verify every committed artifact before creating a draft.
+          payloads = {}
+          for name, expected in hashes.items():
+              url = "https://raw.githubusercontent.com/" + repo + "/" + sha + "/dist/" + name
+              with urllib.request.urlopen(url, timeout=120) as response:
+                  data = response.read()
+              assert hashlib.sha256(data).hexdigest() == expected, name
+              payloads[name] = data
+          try:
+              existing = request(api + "/releases/tags/v1.1.1")
+          except urllib.error.HTTPError as error:
+              if error.code != 404: raise
+              existing = None
+          if existing is not None:
+              raise RuntimeError("v1.1.1 already exists; refusing to replace it automatically")
+          release = request(api + "/releases", {"tag_name":"v1.1.1", "target_commitish":sha, "name":"E4Temas v1.1.1", "body":body, "draft":True, "prerelease":False}, "POST")
+          for name, data in payloads.items():
+              url = "https://uploads.github.com/repos/" + repo + "/releases/" + str(release["id"]) + "/assets?name=" + name
+              asset = request(url, data, "POST", "image/png" if name.endswith(".png") else "application/octet-stream")
+              assert asset["size"] == len(data) and asset["state"] == "uploaded", name
+              if asset.get("digest"): assert asset["digest"] == "sha256:" + hashes[name], name
+              print("Verified release asset:", name)
+          release = request(api + "/releases/" + str(release["id"]), {"draft":False, "make_latest":"true"}, "PATCH")
+          print("Published:", release["html_url"])
